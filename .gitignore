@@ -44,4 +44,4 @@ app-example
 
 
 backend/.env
-backend/node_modules/
+backend/node_modules/*.dmg
