@@ -15,7 +15,12 @@ const orderSchema = new mongoose.Schema({
     medication: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Medication',
-      required: [true, 'Medication is required']
+      required: false,   // ← was true; local catalog items have no DB ref
+      default: null,
+    },
+    name: {
+      type: String,
+      default: 'Medication',
     },
     quantity: {
       type: Number,
@@ -27,7 +32,10 @@ const orderSchema = new mongoose.Schema({
       required: [true, 'Price is required'],
       min: [0, 'Price cannot be negative']
     },
-    dose: String,
+    dose: {
+      type: String,
+      default: '',
+    },
     requiresPrescription: {
       type: Boolean,
       default: false
@@ -37,15 +45,15 @@ const orderSchema = new mongoose.Schema({
   deliveryAddress: {
     street: {
       type: String,
-      required: [true, 'Street address is required']
+      default: 'Default Street',   // ← was required; avoid crash on sparse objects
     },
     city: {
       type: String,
-      required: [true, 'City is required']
+      default: 'Accra',
     },
     region: {
       type: String,
-      required: [true, 'Region is required']
+      default: 'Greater Accra',
     },
     postalCode: String,
     country: {
@@ -85,7 +93,11 @@ const orderSchema = new mongoose.Schema({
   },
   estimatedDelivery: {
     type: Date,
-    required: true
+    default: () => {
+      const d = new Date();
+      d.setDate(d.getDate() + 4);
+      return d;
+    },
   },
   actualDelivery: Date,
   trackingNumber: String,
@@ -117,7 +129,7 @@ const orderSchema = new mongoose.Schema({
 // Generate order number before saving
 orderSchema.pre('save', function(next) {
   if (this.isNew) {
-    this.orderNumber = 'RX' + Date.now().toString(36).toUpperCase();
+    this.orderNumber = 'RX-' + Date.now().toString().slice(-6);
   }
   next();
 });

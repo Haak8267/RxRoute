@@ -2,6 +2,7 @@ const express = require("express");
 const Order = require("../models/Order");
 const Medication = require('../models/Medication');
 const auth = require("../middleware/auth");
+const mongoose = require("mongoose");
 
 const router = express.Router();
 
@@ -30,57 +31,91 @@ router.post("/", auth, async (req, res) => {
     const invalidItems = [];
 
     for (const item of items) {
-      if (!item.medication) {
-        invalidItems.push("Unknown medication");
-        continue;
+      // Try to look up by MongoDB ID first
+      const isValidObjectId = item.medication &&
+        mongoose.Types.ObjectId.isValid(item.medication);
+
+      if (isValidObjectId) {
+        const medication = await Medication.findById(item.medication);
+        if (medication) {
+          if (!medication.inStock) {
+            return res.status(400).json({
+              success: false,
+              message: `${medication.name} is out of stock`,
+            });
+          }
+          const itemTotal = medication.price * item.quantity;
+          subtotal += itemTotal;
+          orderItems.push({
+            medication: medication._id,
+            quantity: item.quantity,
+            price: medication.price,
+            dose: medication.dose,
+            requiresPrescription: medication.requiresPrescription,
+          });
+          continue;
+        }
+        // If valid ObjectId but not found, fall through to inline handling
       }
-      const medication = await Medication.findById(item.medication);
-      if (!medication) {
-        invalidItems.push(item.medication);
-        continue;
-      }
-      if (!medication.inStock) {
-        return res.status(400).json({
-          success: false,
-          message: `${medication.name} is out of stock`,
+
+      // Fallback: accept inline item data (local catalog with non-ObjectId IDs)
+      if (item.price != null && item.quantity) {
+        const itemTotal = item.price * item.quantity;
+        subtotal += itemTotal;
+        orderItems.push({
+          medication: null, // no DB reference
+          quantity: item.quantity,
+          price: item.price,
+          dose: item.dose || "",
+          requiresPrescription: false,
         });
+      } else {
+        invalidItems.push(item.name || item.medication || "Unknown item");
       }
-      const itemTotal = medication.price * item.quantity;
-      subtotal += itemTotal;
-      orderItems.push({
-        medication: medication._id,
-        quantity: item.quantity,
-        price: medication.price,
-        dose: medication.dose,
-        requiresPrescription: medication.requiresPrescription,
-      });
     }
 
-    // Check if there were invalid items
     if (invalidItems.length > 0) {
       return res.status(400).json({
         success: false,
-        message: `Invalid medications: ${invalidItems.join(", ")}`,
+        message: `Invalid items: ${invalidItems.join(", ")}`,
       });
     }
 
-    // Calculate delivery fee (simple logic)
+    // Normalise delivery address
+    let deliveryAddressObj = deliveryAddress;
+    if (typeof deliveryAddress === "string") {
+      deliveryAddressObj = {
+        street: deliveryAddress,
+        city: "Accra",
+        region: "Greater Accra",
+        country: "Ghana",
+      };
+    } else if (deliveryAddress && !deliveryAddress.street) {
+      // Handle {country: "Ghana"} or similar sparse objects
+      deliveryAddressObj = {
+        street: deliveryAddress.street || "Default Street",
+        city: deliveryAddress.city || "Accra",
+        region: deliveryAddress.region || "Greater Accra",
+        country: deliveryAddress.country || "Ghana",
+      };
+    }
+
+    // Calculate delivery fee (free over GHS 100)
     const deliveryFee = subtotal > 100 ? 0 : 10;
     const totalAmount = subtotal + deliveryFee;
 
-    // Set estimated delivery (3-5 days from now)
+    // Estimated delivery: 3–5 days
     const estimatedDelivery = new Date();
     estimatedDelivery.setDate(
       estimatedDelivery.getDate() + Math.floor(Math.random() * 3) + 3,
     );
 
-    // Generate order number
     const orderNumber = `RX-${Date.now().toString().slice(-6)}`;
 
     const order = new Order({
       user: req.user._id,
       items: orderItems,
-      deliveryAddress,
+      deliveryAddress: deliveryAddressObj,
       paymentMethod,
       subtotal,
       deliveryFee,
@@ -99,16 +134,24 @@ router.post("/", auth, async (req, res) => {
     });
 
     await order.save();
-    await order.populate([
-      { path: "user", select: "firstName lastName email phone" },
-      { path: "items.medication", select: "name dose imageUrl" },
-    ]);
+
+    // Only populate medication if it exists
+    try {
+      await order.populate([
+        { path: "user", select: "firstName lastName email phone" },
+        { path: "items.medication", select: "name dose imageUrl" },
+      ]);
+    } catch (populateErr) {
+      // Non-fatal: some items may have null medication refs
+      console.warn("Populate warning:", populateErr.message);
+    }
 
     res.status(201).json({
       success: true,
       message: "Order placed successfully",
       data: {
         order,
+        orderNumber: order.orderNumber,
       },
     });
   } catch (error) {
@@ -116,6 +159,7 @@ router.post("/", auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Server error creating order",
+      detail: error.message,
     });
   }
 });
@@ -139,17 +183,27 @@ router.get("/", auth, async (req, res) => {
 
     const total = await Order.countDocuments(query);
 
+    // Normalise each order so the frontend gets a flat, consistent shape
+    const normalisedOrders = orders.map((o) => ({
+      _id: o._id,
+      orderNumber: o.orderNumber,
+      status: mapStatus(o.status),
+      items: o.items.map((i) => ({
+        name: i.medication?.name || "Medication",
+        qty: i.quantity,
+        price: i.price,
+      })),
+      createdAt: o.createdAt,
+      totalAmount: o.totalAmount,
+      deliveryAddress: formatAddress(o.deliveryAddress),
+      estimatedDelivery: o.estimatedDelivery
+        ? o.estimatedDelivery.toLocaleDateString()
+        : undefined,
+    }));
+
     res.json({
       success: true,
-      data: {
-        orders,
-        pagination: {
-          currentPage: page,
-          totalPages: Math.ceil(total / limit),
-          totalItems: total,
-          itemsPerPage: limit,
-        },
-      },
+      data: normalisedOrders,
     });
   } catch (error) {
     console.error("Get orders error:", error);
@@ -180,9 +234,7 @@ router.get("/:id", auth, async (req, res) => {
 
     res.json({
       success: true,
-      data: {
-        order,
-      },
+      data: { order },
     });
   } catch (error) {
     console.error("Get order error:", error);
@@ -228,9 +280,7 @@ router.put("/:id/cancel", auth, async (req, res) => {
     res.json({
       success: true,
       message: "Order cancelled successfully",
-      data: {
-        order,
-      },
+      data: { order },
     });
   } catch (error) {
     console.error("Cancel order error:", error);
@@ -240,5 +290,30 @@ router.put("/:id/cancel", auth, async (req, res) => {
     });
   }
 });
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Map DB status values to the frontend's expected set */
+function mapStatus(status) {
+  const map = {
+    Pending: "Pending",
+    Confirmed: "In Progress",
+    Preparing: "In Progress",
+    "Out for Delivery": "In Progress",
+    Delivered: "Delivered",
+    Cancelled: "Cancelled",
+  };
+  return map[status] || "In Progress";
+}
+
+/** Format a deliveryAddress object as a plain string for the frontend */
+function formatAddress(addr) {
+  if (!addr) return "Unknown address";
+  if (typeof addr === "string") return addr;
+  const parts = [addr.street, addr.city, addr.region, addr.country].filter(
+    Boolean,
+  );
+  return parts.join(", ") || "Unknown address";
+}
 
 module.exports = router;

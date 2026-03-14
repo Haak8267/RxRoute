@@ -78,10 +78,6 @@ const apiRequest = async (
     const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
 
     console.log(`[API] Response status: ${response.status}`);
-    console.log(
-      `[API] Response headers:`,
-      Object.fromEntries(response.headers.entries()),
-    );
 
     let data: any;
     const contentType = response.headers.get("content-type");
@@ -103,14 +99,11 @@ const apiRequest = async (
         data?.msg ||
         `Request failed with status ${response.status}`;
 
-      // For 401 errors, handle gracefully without error logging
       if (response.status === 401) {
         console.warn(`[API] Authentication required for ${endpoint}`);
-        // Return a structured error that the auth context can handle
         return { success: false, message: errorMessage, requiresAuth: true };
       }
 
-      // For other errors, log as error and throw
       console.error(`[API] Error ${response.status}:`, errorMessage);
       throw new Error(errorMessage);
     }
@@ -235,12 +228,16 @@ export const medicationAPI = {
 export const orderAPI = {
   create: async (orderData: {
     items: {
-      medication: string;
+      // Support both DB-backed (medication) and local catalog items (name + price)
+      medication?: string;
+      name?: string;
       quantity: number;
       price: number;
-      dose: string;
+      dose?: string;
     }[];
-    shippingAddress?: string;
+    deliveryAddress?: any;
+    phoneNumber?: string;
+    totalAmount?: number;
     [key: string]: any;
   }) => {
     return apiRequest("/orders", {

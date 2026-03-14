@@ -350,27 +350,40 @@ function CartSheet({
 
     setIsPlacingOrder(true);
     try {
-      // Prepare order data
       const orderData = {
         items: items.map((item) => ({
-          medicine: item.medicine._id,
+          // Send the medicine _id as `medication` for DB lookup
+          // Backend will fall back to inline price if ID is not a valid ObjectId
+          medication: item.medicine._id,
+          name: item.medicine.name,
           quantity: item.qty,
           price: item.medicine.price,
+          dose: item.medicine.dose,
         })),
-        deliveryAddress: user.address || "Default Address",
+        deliveryAddress: {
+          street: typeof user.address === "string"
+            ? user.address
+            : user.address?.street || "Default Street",
+          city: user.address?.city || "Accra",
+          region: user.address?.region || "Greater Accra",
+          country: user.address?.country || "Ghana",
+        },
         phoneNumber: user.phone || "",
         totalAmount: totalPrice,
       };
 
-      // Create order via API
       const response = await orderAPI.create(orderData);
 
       if (response.success) {
         onClose();
         clearCart();
+        const orderNum =
+          response.data?.orderNumber ||
+          response.data?.order?.orderNumber ||
+          "—";
         Alert.alert(
           "Order Placed! 🎉",
-          `Your order #${response.data.orderNumber} has been placed successfully.`,
+          `Your order #${orderNum} has been placed successfully.`,
           [
             {
               text: "Track Order",
@@ -393,7 +406,6 @@ function CartSheet({
       setIsPlacingOrder(false);
     }
   };
-
   return (
     <Modal visible={visible} animationType="slide" transparent>
       <View className="flex-1 bg-black/50 justify-end">
