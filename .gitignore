@@ -45,3 +45,4 @@ app-example
 
 backend/.env
 backend/node_modules/*.dmg
+*.dmg
