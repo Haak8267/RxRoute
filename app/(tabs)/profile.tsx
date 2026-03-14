@@ -23,7 +23,6 @@ import {
     Alert,
     Image,
     Modal,
-    SafeAreaView,
     ScrollView,
     Text,
     TextInput,
@@ -31,6 +30,7 @@ import {
     View,
 } from "react-native";
 import { useAuth } from "../../context/auth-context";
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

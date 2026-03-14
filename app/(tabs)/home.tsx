@@ -28,7 +28,6 @@ import {
     Alert,
     FlatList,
     Modal,
-    SafeAreaView,
     ScrollView,
     Text,
     TextInput,
@@ -37,6 +36,7 @@ import {
 } from "react-native";
 import { useAuth } from "../../context/auth-context";
 import { orderAPI } from "../../services/api";
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

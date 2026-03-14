@@ -234,7 +234,12 @@ export const medicationAPI = {
 
 export const orderAPI = {
   create: async (orderData: {
-    items: { medicationId: string; quantity: number }[];
+    items: {
+      medication: string;
+      quantity: number;
+      price: number;
+      dose: string;
+    }[];
     shippingAddress?: string;
     [key: string]: any;
   }) => {

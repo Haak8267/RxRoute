@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const Medication = require('./models/Medication');
+const Medication = require('./models/Medication')');
 
 // Sample medications to seed the database
 const medications = [
