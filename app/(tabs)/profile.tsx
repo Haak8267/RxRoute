@@ -29,8 +29,8 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../context/auth-context";
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -731,9 +731,7 @@ export default function ProfileScreen() {
           <MenuRow
             icon={<HelpCircle size={18} color="#6b7280" />}
             label="Help & Support"
-            onPress={() =>
-              Alert.alert("Support", "Contact support@pharmago.com")
-            }
+            onPress={() => router.push("/(tabs)/help")}
           />
         </View>
 

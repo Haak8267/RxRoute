@@ -19,25 +19,37 @@ app.use(helmet());
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100,
 });
 app.use(limiter);
 
-// CORS configuration
+// ─── CORS ─────────────────────────────────────────────────────────────────────
+// Allow all origins in development so physical devices on your LAN can connect.
+// In production, replace this with your actual domain.
 app.use(
   cors({
-    origin: [
-      "http://localhost:19006",
-      "exp://172.22.191.240:8081",
-      "exp://172.22.191.240:8081",
-      "http://localhost:8081",
-      "http://127.0.0.1:8081",
-      "http://localhost:*",
-      "http://127.0.0.1:*",
-    ], // Expo development URLs and localhost
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, curl, Postman)
+      // or any local network IP
+      if (
+        !origin ||
+        origin.startsWith("http://localhost") ||
+        origin.startsWith("http://127.0.0.1") ||
+        origin.startsWith("http://192.168.") ||
+        origin.startsWith("http://10.") ||
+        origin.startsWith("exp://")
+      ) {
+        callback(null, true);
+      } else if (process.env.NODE_ENV !== "production") {
+        // Allow everything in development
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
-  }),
+  })
 );
 
 // Body parser middleware
@@ -47,13 +59,13 @@ app.use(express.urlencoded({ extended: true }));
 // Multer configuration for file uploads
 const upload = multer({ storage });
 
-// Connect to MongoDB with graceful handling
+// Connect to MongoDB
 const connectDB = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
-    console.log("✅MongoDB connected successfully");
+    console.log("✅ MongoDB connected successfully");
   } catch (err) {
-    console.error("❌MongoDB connection error:", err);
+    console.error("❌ MongoDB connection error:", err);
     console.log("⚠️  Continuing without database - some features may not work");
   }
 };
@@ -95,7 +107,11 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
-  res.json({ status: "OK", timestamp: new Date().toISOString() });
+  res.json({
+    status: "OK",
+    timestamp: new Date().toISOString(),
+    message: "RxRoute backend is running",
+  });
 });
 
 // Error handling middleware
@@ -116,8 +132,12 @@ app.use("*", (req, res) => {
   });
 });
 
+// ─── Listen on 0.0.0.0 so LAN devices can reach the server ───────────────────
 const PORT = process.env.PORT || 5002;
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`\n🚀 Server running on port ${PORT}`);
+  console.log(`   Local:   http://localhost:${PORT}`);
+  console.log(`   Network: http://<your-ip>:${PORT}`);
+  console.log(`   Health:  http://localhost:${PORT}/api/health\n`);
 });

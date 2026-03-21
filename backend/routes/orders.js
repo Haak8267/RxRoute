@@ -1,6 +1,6 @@
 const express = require("express");
 const Order = require("../models/Order");
-const Medication = require('../models/Medication');
+const Medication = require("../models/Medication");
 const auth = require("../middleware/auth");
 const mongoose = require("mongoose");
 
@@ -25,17 +25,18 @@ router.post("/", auth, async (req, res) => {
       });
     }
 
-    // Validate items and calculate totals
     let subtotal = 0;
     const orderItems = [];
-    const invalidItems = [];
 
     for (const item of items) {
-      // Try to look up by MongoDB ID first
-      const isValidObjectId = item.medication &&
-        mongoose.Types.ObjectId.isValid(item.medication);
+      const isValidObjectId =
+        item.medication &&
+        mongoose.Types.ObjectId.isValid(item.medication) &&
+        String(new mongoose.Types.ObjectId(item.medication)) ===
+          String(item.medication);
 
       if (isValidObjectId) {
+        // Try to find in DB
         const medication = await Medication.findById(item.medication);
         if (medication) {
           if (!medication.inStock) {
@@ -44,45 +45,40 @@ router.post("/", auth, async (req, res) => {
               message: `${medication.name} is out of stock`,
             });
           }
-          const itemTotal = medication.price * item.quantity;
-          subtotal += itemTotal;
+          subtotal += medication.price * item.quantity;
           orderItems.push({
             medication: medication._id,
+            name: medication.name,
             quantity: item.quantity,
             price: medication.price,
-            dose: medication.dose,
-            requiresPrescription: medication.requiresPrescription,
+            dose: medication.dose || "",
+            requiresPrescription: medication.requiresPrescription || false,
           });
           continue;
         }
-        // If valid ObjectId but not found, fall through to inline handling
       }
 
-      // Fallback: accept inline item data (local catalog with non-ObjectId IDs)
+      // Fallback: local catalog item — use inline price/name
       if (item.price != null && item.quantity) {
-        const itemTotal = item.price * item.quantity;
-        subtotal += itemTotal;
+        subtotal += item.price * item.quantity;
         orderItems.push({
-          medication: null, // no DB reference
+          medication: null,
+          name: item.name || "Medication",
           quantity: item.quantity,
           price: item.price,
           dose: item.dose || "",
           requiresPrescription: false,
         });
       } else {
-        invalidItems.push(item.name || item.medication || "Unknown item");
+        return res.status(400).json({
+          success: false,
+          message: `Invalid item: ${item.name || "Unknown"} — missing price or quantity`,
+        });
       }
     }
 
-    if (invalidItems.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid items: ${invalidItems.join(", ")}`,
-      });
-    }
-
     // Normalise delivery address
-    let deliveryAddressObj = deliveryAddress;
+    let deliveryAddressObj;
     if (typeof deliveryAddress === "string") {
       deliveryAddressObj = {
         street: deliveryAddress,
@@ -90,21 +86,18 @@ router.post("/", auth, async (req, res) => {
         region: "Greater Accra",
         country: "Ghana",
       };
-    } else if (deliveryAddress && !deliveryAddress.street) {
-      // Handle {country: "Ghana"} or similar sparse objects
+    } else {
       deliveryAddressObj = {
-        street: deliveryAddress.street || "Default Street",
-        city: deliveryAddress.city || "Accra",
-        region: deliveryAddress.region || "Greater Accra",
-        country: deliveryAddress.country || "Ghana",
+        street: deliveryAddress?.street || "Default Street",
+        city: deliveryAddress?.city || "Accra",
+        region: deliveryAddress?.region || "Greater Accra",
+        country: deliveryAddress?.country || "Ghana",
       };
     }
 
-    // Calculate delivery fee (free over GHS 100)
     const deliveryFee = subtotal > 100 ? 0 : 10;
     const totalAmount = subtotal + deliveryFee;
 
-    // Estimated delivery: 3–5 days
     const estimatedDelivery = new Date();
     estimatedDelivery.setDate(
       estimatedDelivery.getDate() + Math.floor(Math.random() * 3) + 3,
@@ -135,15 +128,14 @@ router.post("/", auth, async (req, res) => {
 
     await order.save();
 
-    // Only populate medication if it exists
+    // Populate only non-null medication refs
     try {
       await order.populate([
         { path: "user", select: "firstName lastName email phone" },
         { path: "items.medication", select: "name dose imageUrl" },
       ]);
     } catch (populateErr) {
-      // Non-fatal: some items may have null medication refs
-      console.warn("Populate warning:", populateErr.message);
+      console.warn("Populate warning (non-fatal):", populateErr.message);
     }
 
     res.status(201).json({
@@ -171,9 +163,7 @@ router.get("/", auth, async (req, res) => {
     const { status, page = 1, limit = 10 } = req.query;
 
     const query = { user: req.user._id };
-    if (status) {
-      query.status = status;
-    }
+    if (status) query.status = status;
 
     const orders = await Order.find(query)
       .populate("items.medication", "name dose imageUrl")
@@ -183,13 +173,12 @@ router.get("/", auth, async (req, res) => {
 
     const total = await Order.countDocuments(query);
 
-    // Normalise each order so the frontend gets a flat, consistent shape
     const normalisedOrders = orders.map((o) => ({
       _id: o._id,
       orderNumber: o.orderNumber,
       status: mapStatus(o.status),
       items: o.items.map((i) => ({
-        name: i.medication?.name || "Medication",
+        name: i.medication?.name || i.name || "Medication",
         qty: i.quantity,
         price: i.price,
       })),
@@ -293,7 +282,6 @@ router.put("/:id/cancel", auth, async (req, res) => {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Map DB status values to the frontend's expected set */
 function mapStatus(status) {
   const map = {
     Pending: "Pending",
@@ -306,7 +294,6 @@ function mapStatus(status) {
   return map[status] || "In Progress";
 }
 
-/** Format a deliveryAddress object as a plain string for the frontend */
 function formatAddress(addr) {
   if (!addr) return "Unknown address";
   if (typeof addr === "string") return addr;
@@ -315,5 +302,30 @@ function formatAddress(addr) {
   );
   return parts.join(", ") || "Unknown address";
 }
+
+// @route   DELETE /api/orders/clear
+// @desc    Clear all user orders
+router.delete("/clear", auth, async (req, res) => {
+  try {
+    // Delete all orders for the authenticated user
+    const result = await Order.deleteMany({
+      user: req.user._id,
+    });
+
+    res.json({
+      success: true,
+      message: "Order history cleared successfully",
+      data: {
+        deletedCount: result.deletedCount || 0,
+      },
+    });
+  } catch (error) {
+    console.error("Clear orders error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error clearing orders",
+    });
+  }
+});
 
 module.exports = router;

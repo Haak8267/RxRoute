@@ -2,41 +2,41 @@ import { Medicine, useCart } from "@/context/cart-context";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import {
-    Bell,
-    CheckCircle,
-    ChevronDown,
-    ChevronRight,
-    Clock,
-    FileText,
-    Keyboard,
-    MapPin,
-    Minus,
-    Pill,
-    Plus,
-    RefreshCw,
-    Search,
-    ShoppingCart,
-    SlidersHorizontal,
-    Star,
-    Trash2,
-    Users,
-    X,
+  Bell,
+  CheckCircle,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  FileText,
+  Keyboard,
+  MapPin,
+  Minus,
+  Pill,
+  Plus,
+  RefreshCw,
+  Search,
+  ShoppingCart,
+  SlidersHorizontal,
+  Star,
+  Trash2,
+  Users,
+  X,
 } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Modal,
-    ScrollView,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Modal,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../context/auth-context";
 import { orderAPI } from "../../services/api";
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -342,7 +342,6 @@ function CartSheet({
       Alert.alert("Login Required", "Please login to place an order.");
       return;
     }
-
     if (items.length === 0) {
       Alert.alert("Cart Empty", "Your cart is empty.");
       return;
@@ -351,19 +350,18 @@ function CartSheet({
     setIsPlacingOrder(true);
     try {
       const orderData = {
+        // ✅ Never send local numeric IDs as `medication` — send name+price only
         items: items.map((item) => ({
-          // Send the medicine _id as `medication` for DB lookup
-          // Backend will fall back to inline price if ID is not a valid ObjectId
-          medication: item.medicine._id,
           name: item.medicine.name,
           quantity: item.qty,
           price: item.medicine.price,
           dose: item.medicine.dose,
         })),
         deliveryAddress: {
-          street: typeof user.address === "string"
-            ? user.address
-            : user.address?.street || "Default Street",
+          street:
+            typeof user.address === "string"
+              ? user.address
+              : user.address?.street || "Default Street",
           city: user.address?.city || "Accra",
           region: user.address?.region || "Greater Accra",
           country: user.address?.country || "Ghana",
@@ -406,6 +404,7 @@ function CartSheet({
       setIsPlacingOrder(false);
     }
   };
+
   return (
     <Modal visible={visible} animationType="slide" transparent>
       <View className="flex-1 bg-black/50 justify-end">
@@ -470,15 +469,12 @@ function CartSheet({
                       borderBottomColor: "#f3f4f6",
                     }}
                   >
-                    {/* Icon */}
                     <View
                       className="w-12 h-12 rounded-2xl items-center justify-center flex-shrink-0"
                       style={{ backgroundColor: "#2A7A4F25" }}
                     >
                       <Pill size={22} color="#2A7A4F" />
                     </View>
-
-                    {/* Info */}
                     <View className="flex-1">
                       <Text className="text-sm font-bold text-gray-900">
                         {item.medicine.name}
@@ -490,8 +486,6 @@ function CartSheet({
                         GHS {item.medicine.price * item.qty}.00
                       </Text>
                     </View>
-
-                    {/* Qty controls */}
                     <View className="flex-row items-center gap-2 bg-gray-50 rounded-xl px-2 py-1">
                       <TouchableOpacity
                         className="w-7 h-7 rounded-full items-center justify-center"
@@ -537,7 +531,7 @@ function CartSheet({
                 <View className="flex-row justify-between mb-1">
                   <Text className="text-sm text-gray-500">Delivery fee</Text>
                   <Text className="text-sm font-semibold text-green-600">
-                    Free
+                    {totalPrice > 100 ? "Free" : "GHS 10.00"}
                   </Text>
                 </View>
                 <View className="h-px bg-gray-100 my-2" />
@@ -546,24 +540,31 @@ function CartSheet({
                     Total
                   </Text>
                   <Text className="text-base font-extrabold text-green-700">
-                    GHS {totalPrice}.00
+                    GHS {totalPrice > 100 ? totalPrice : totalPrice + 10}.00
                   </Text>
                 </View>
                 <TouchableOpacity
                   className="rounded-2xl py-4 items-center flex-row justify-center gap-2"
-                  style={{ backgroundColor: "#2A7A4F" }}
+                  style={{
+                    backgroundColor: isPlacingOrder ? "#4a9a6f" : "#2A7A4F",
+                  }}
                   onPress={handleCheckout}
+                  disabled={isPlacingOrder}
                 >
-                  <CheckCircle size={18} color="#fff" />
-                  <Text className="text-base font-bold text-white">
-                    Place Order
-                  </Text>
+                  {isPlacingOrder ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <CheckCircle size={18} color="#fff" />
+                      <Text className="text-base font-bold text-white">
+                        Place Order
+                      </Text>
+                    </>
+                  )}
                 </TouchableOpacity>
                 <TouchableOpacity
                   className="mt-2 py-2 items-center"
-                  onPress={() => {
-                    clearCart();
-                  }}
+                  onPress={() => clearCart()}
                 >
                   <Text className="text-xs text-red-400 font-semibold">
                     Clear cart
@@ -869,7 +870,6 @@ export default function HomeScreen() {
   const { totalCount } = useCart();
   const { user } = useAuth();
 
-  // Time
   const [now, setNow] = useState(new Date());
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60_000);
@@ -877,7 +877,6 @@ export default function HomeScreen() {
   }, []);
   const { text: greetText, emoji: greetEmoji } = getGreeting(now.getHours());
 
-  // Location
   const [locationLabel, setLocationLabel] = useState("Locating…");
   const [locationLoading, setLocationLoading] = useState(true);
 
@@ -918,7 +917,6 @@ export default function HomeScreen() {
     fetchLocation();
   }, []);
 
-  // Notifications
   const [notifications, setNotifications] =
     useState<Notification[]>(MOCK_NOTIFICATIONS);
   const [showNotifs, setShowNotifs] = useState(false);
@@ -928,7 +926,6 @@ export default function HomeScreen() {
       prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
     );
 
-  // Search & filter
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState("All");
 
@@ -947,10 +944,7 @@ export default function HomeScreen() {
       ? ALL_MEDICINES
       : ALL_MEDICINES.filter((m) => m.category === activeCategory);
 
-  // Cart
   const [showCart, setShowCart] = useState(false);
-
-  // See all modals
   const [seeAllConfig, setSeeAllConfig] = useState<{
     title: string;
     meds: Medicine[];
@@ -1004,7 +998,6 @@ export default function HomeScreen() {
           </View>
 
           <View className="flex-row items-center gap-2">
-            {/* Cart button */}
             <TouchableOpacity
               className="h-10 rounded-full bg-white items-center justify-center shadow-sm flex-row gap-1.5 px-3 relative"
               onPress={() => setShowCart(true)}
@@ -1025,7 +1018,6 @@ export default function HomeScreen() {
               )}
             </TouchableOpacity>
 
-            {/* Bell */}
             <TouchableOpacity
               className="w-10 h-10 rounded-full bg-white items-center justify-center shadow-sm relative"
               onPress={() => setShowNotifs((v) => !v)}
@@ -1209,7 +1201,7 @@ export default function HomeScreen() {
                 icon={<FileText size={24} color="#2A7A4F" />}
                 label={"Upload\nRx"}
                 bg="#EAF5EE"
-                onPress={() => router.push("/(tabs)/camera")}
+                onPress={() => router.push("/(tabs)/meds")}
               />
               <QuickAction
                 icon={<Keyboard size={24} color="#D97706" />}
@@ -1334,10 +1326,8 @@ export default function HomeScreen() {
         )}
       </ScrollView>
 
-      {/* Cart sheet */}
       <CartSheet visible={showCart} onClose={() => setShowCart(false)} />
 
-      {/* See All sheet */}
       {seeAllConfig && (
         <SeeAllModal
           visible

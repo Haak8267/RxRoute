@@ -1,11 +1,18 @@
+import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import {
     AlertCircle,
     ArrowLeft,
     Bell,
+    Camera,
+    CheckCircle,
     CheckCircle2,
     ChevronRight,
     Clock,
+    FileText,
+    FileUp,
+    ImageIcon,
     Pill,
     Plus,
     Settings,
@@ -14,8 +21,11 @@ import {
 } from "lucide-react-native";
 import React, { useState } from "react";
 import {
+    ActivityIndicator,
     Alert,
+    Image,
     Modal,
+    SafeAreaView,
     ScrollView,
     StyleSheet,
     Text,
@@ -23,7 +33,9 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAuth } from "../../context/auth-context";
+import { orderAPI } from "../../services/api";
+import { uploadImageFromRN, uploadPdfFromRN } from "../../services/cloudinary";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -45,7 +57,12 @@ type Medication = {
   takenToday: boolean;
   color: string;
   times: string[];
+  price?: number; // Add optional price field
 };
+
+type SelectedFile =
+  | { type: "image"; uri: string; fileName: string }
+  | { type: "pdf"; uri: string; fileName: string };
 
 // ─── Mock data ────────────────────────────────────────────────────────────────
 
@@ -56,63 +73,7 @@ const MEMBERS: Member[] = [
   { id: "ama", name: "Ama", label: "Ama", color: "#D97706", initials: "AM" },
 ];
 
-const INITIAL_MEDS: Medication[] = [
-  {
-    id: "1",
-    memberId: "me",
-    name: "Paracetamol",
-    dose: "1000mg",
-    frequency: "2x Daily",
-    refillInDays: 5,
-    takenToday: false,
-    color: "#2A7A4F",
-    times: ["8:00 AM", "8:00 PM"],
-  },
-  {
-    id: "2",
-    memberId: "me",
-    name: "Vitamin C",
-    dose: "500mg",
-    frequency: "1x Daily",
-    refillInDays: 12,
-    takenToday: false,
-    color: "#2563EB",
-    times: ["9:00 AM"],
-  },
-  {
-    id: "3",
-    memberId: "mum",
-    name: "Metformin",
-    dose: "500mg",
-    frequency: "2x Daily",
-    refillInDays: 3,
-    takenToday: false,
-    color: "#7C5CBF",
-    times: ["7:00 AM", "7:00 PM"],
-  },
-  {
-    id: "4",
-    memberId: "dad",
-    name: "Lisinopril",
-    dose: "10mg",
-    frequency: "1x Daily",
-    refillInDays: 8,
-    takenToday: false,
-    color: "#2563EB",
-    times: ["7:00 AM"],
-  },
-  {
-    id: "5",
-    memberId: "ama",
-    name: "Folic Acid",
-    dose: "400mcg",
-    frequency: "1x Daily",
-    refillInDays: 20,
-    takenToday: false,
-    color: "#D97706",
-    times: ["8:00 AM"],
-  },
-];
+const INITIAL_MEDS: Medication[] = [];
 
 const FREQUENCIES = ["1x Daily", "2x Daily", "3x Daily", "Weekly", "As Needed"];
 
@@ -179,11 +140,13 @@ function MedCard({
   onToggleTaken,
   onDelete,
   onRefill,
+  onOrderNow,
 }: {
   med: Medication;
   onToggleTaken: (id: string) => void;
   onDelete: (id: string) => void;
   onRefill: (med: Medication) => void;
+  onOrderNow: (med: Medication) => void;
 }) {
   return (
     <View style={styles.medCard}>
@@ -240,6 +203,14 @@ function MedCard({
           </Text>
         </TouchableOpacity>
 
+        {/* Order Now */}
+        <TouchableOpacity
+          onPress={() => onOrderNow(med)}
+          style={styles.orderNowBtn}
+        >
+          <Text style={styles.orderNowBtnText}>Order</Text>
+        </TouchableOpacity>
+
         {/* Delete */}
         <TouchableOpacity
           onPress={() => onDelete(med.id)}
@@ -269,6 +240,7 @@ function AddMedModal({
   const [dose, setDose] = useState("");
   const [freq, setFreq] = useState(FREQUENCIES[0]);
   const [refill, setRefill] = useState("30");
+  const [price, setPrice] = useState("15"); // Add price state
   const member = MEMBERS.find((m) => m.id === memberId)!;
 
   const submit = () => {
@@ -297,11 +269,13 @@ function AddMedModal({
       refillInDays: parseInt(refill) || 30,
       color: member.color,
       times,
+      price: parseFloat(price) || 15, // Add price to medication
     });
     setName("");
     setDose("");
     setFreq(FREQUENCIES[0]);
     setRefill("30");
+    setPrice("15"); // Reset price
     onClose();
   };
 
@@ -383,6 +357,16 @@ function AddMedModal({
             onChangeText={setRefill}
           />
 
+          <Text style={styles.inputLabel}>Price (GHS)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="15"
+            placeholderTextColor="#9ca3af"
+            keyboardType="number-pad"
+            value={price}
+            onChangeText={setPrice}
+          />
+
           <TouchableOpacity
             style={[styles.addMedBtn, { backgroundColor: member.color }]}
             onPress={submit}
@@ -399,15 +383,159 @@ function AddMedModal({
 
 export default function MedsScreen() {
   const router = useRouter();
+  const { user } = useAuth(); // Add useAuth hook here
   const [activeMember, setActiveMember] = useState("me");
   const [meds, setMeds] = useState<Medication[]>(INITIAL_MEDS);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [showPrescriptionUpload, setShowPrescriptionUpload] = useState(false);
 
   const filtered = meds.filter((m) => m.memberId === activeMember);
   const takenCount = filtered.filter((m) => m.takenToday).length;
   const urgent = filtered.filter((m) => m.refillInDays <= 5 && !m.takenToday);
   const activeMemberData = MEMBERS.find((m) => m.id === activeMember)!;
 
+  // ── Camera Functions ──────────────────────────────────────────────────────
+  const handleTakePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert(
+        "Camera Permission Required",
+        "Please allow camera access in your device settings to take prescription photos.",
+        [{ text: "OK" }],
+      );
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.9,
+        allowsEditing: true,
+        aspect: [4, 3],
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        setSelectedFile({
+          type: "image",
+          uri: asset.uri,
+          fileName: asset.fileName ?? `photo_${Date.now()}.jpg`,
+        });
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Gallery ─────────────────────────────────────────────────────────────
+  const handleUploadGallery = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert(
+        "Gallery Permission Required",
+        "Please allow photo library access in your device settings.",
+        [{ text: "OK" }],
+      );
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.9,
+        allowsEditing: true,
+        aspect: [4, 3],
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        setSelectedFile({
+          type: "image",
+          uri: asset.uri,
+          fileName: asset.fileName ?? `image_${Date.now()}.jpg`,
+        });
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── File / PDF picker ────────────────────────────────────────────────────
+  const handleFileUpload = async () => {
+    setLoading(true);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ["image/jpeg", "image/png", "application/pdf"],
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        const isPdf = asset.mimeType === "application/pdf";
+        setSelectedFile({
+          type: isPdf ? "pdf" : "image",
+          uri: asset.uri,
+          fileName: asset.name,
+        });
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Submit ───────────────────────────────────────────────────────────────
+  const handleSubmit = async () => {
+    if (!selectedFile) return;
+
+    setLoading(true);
+    try {
+      let uploadResult;
+
+      if (selectedFile.type === "image") {
+        uploadResult = await uploadImageFromRN(
+          selectedFile.uri,
+          "rxroute/prescriptions",
+        );
+      } else {
+        uploadResult = await uploadPdfFromRN(
+          selectedFile.uri,
+          "rxroute/prescriptions",
+        );
+      }
+
+      Alert.alert(
+        "Prescription Uploaded",
+        `Your prescription "${selectedFile.fileName}" has been uploaded successfully.`,
+        [
+          {
+            text: "OK",
+            onPress: () => {
+              setSelectedFile(null);
+              setShowPrescriptionUpload(false);
+            },
+          },
+          { text: "View Order", onPress: () => router.push("/(tabs)/orders") },
+        ],
+      );
+    } catch (error) {
+      console.error("Upload error:", error);
+      Alert.alert(
+        "Upload Failed",
+        "Failed to upload prescription. Please try again.",
+        [{ text: "OK" }],
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearFile = () => setSelectedFile(null);
+
+  // ── Medication Functions ───────────────────────────────────────────────────
   const toggleTaken = (id: string) =>
     setMeds((prev) =>
       prev.map((m) => (m.id === id ? { ...m, takenToday: !m.takenToday } : m)),
@@ -443,143 +571,392 @@ export default function MedsScreen() {
       },
     ]);
 
+  const handleOrderNow = async (med: Medication) => {
+    Alert.alert(
+      "Order Medication",
+      `Create an order for ${med.name} (${med.dose})?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Order Now",
+          style: "default",
+          onPress: async () => {
+            try {
+              // Check if user is authenticated
+              if (!user) {
+                Alert.alert(
+                  "Login Required",
+                  "Please login to create orders.",
+                  [
+                    { text: "Cancel" },
+                    {
+                      text: "Login",
+                      onPress: () => router.push("/(auth)/Login"),
+                    },
+                  ],
+                );
+                return;
+              }
+
+              console.log("Creating order for user:", user._id);
+
+              // Create actual order using API
+              const medicationPrice = med.price || 15; // Use medication price or default
+              const orderData = {
+                items: [
+                  {
+                    name: med.name,
+                    quantity: 1, // Default quantity
+                    price: medicationPrice,
+                    dose: med.dose,
+                  },
+                ],
+                totalAmount: medicationPrice,
+                deliveryAddress: "User Address", // You might want to collect this
+              };
+
+              console.log("Creating order with data:", orderData);
+              const response = await orderAPI.create(orderData);
+              console.log("Order creation response:", response);
+
+              if (response && (response.data || response._id)) {
+                Alert.alert(
+                  "Order Created!",
+                  `Your order for ${med.name} has been placed successfully. Order #${response.data?._id || response._id}`,
+                  [
+                    { text: "OK" },
+                    {
+                      text: "View Orders",
+                      onPress: () => router.push("/(tabs)/orders"),
+                    },
+                  ],
+                );
+              } else {
+                throw new Error("Invalid response from server");
+              }
+            } catch (error: any) {
+              console.error("Order creation error:", error);
+              Alert.alert(
+                "Order Failed",
+                `Failed to create order: ${error?.message || "Please check your connection and try again."}`,
+                [{ text: "OK" }],
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backButton}
-        >
-          <ArrowLeft size={22} color="#1a1a1a" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Family Cabinet</Text>
-        <TouchableOpacity style={styles.settingsBtn}>
-          <Settings size={22} color="#1a1a1a" />
-        </TouchableOpacity>
-      </View>
-
-      {/* Members row */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.membersScroll}
-        contentContainerStyle={styles.membersContent}
-      >
-        {MEMBERS.map((m) => (
-          <Avatar
-            key={m.id}
-            member={m}
-            active={activeMember === m.id}
-            onPress={() => setActiveMember(m.id)}
-          />
-        ))}
-      </ScrollView>
-
-      <ScrollView
-        style={styles.scroll}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 120 }}
-      >
-        {/* Urgent refill banner */}
-        {urgent.length > 0 && (
-          <View style={styles.urgentBanner}>
-            <AlertCircle size={16} color="#EF4444" />
-            <Text style={styles.urgentText}>
-              {urgent.length} medication{urgent.length > 1 ? "s" : ""} need
-              {urgent.length === 1 ? "s" : ""} refill soon
-            </Text>
-            <ChevronRight size={14} color="#EF4444" />
+      {!showPrescriptionUpload ? (
+        <>
+          {/* Header */}
+          <View style={styles.header}>
+            <TouchableOpacity
+              onPress={() => router.back()}
+              style={styles.backButton}
+            >
+              <ArrowLeft size={22} color="#1a1a1a" />
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>Family Cabinet</Text>
+            <TouchableOpacity style={styles.settingsBtn}>
+              <Settings size={22} color="#1a1a1a" />
+            </TouchableOpacity>
           </View>
-        )}
 
-        {/* Progress */}
-        {filtered.length > 0 && (
-          <View style={styles.progressCard}>
-            <View style={styles.progressHeader}>
-              <Text style={styles.progressTitle}>Today&apos;s Progress</Text>
-              <Text
-                style={[
-                  styles.progressCount,
-                  { color: activeMemberData.color },
-                ]}
-              >
-                {takenCount}/{filtered.length}
-              </Text>
-            </View>
-            <View style={styles.progressBar}>
-              <View
-                style={[
-                  styles.progressFill,
-                  {
-                    width: `${filtered.length ? (takenCount / filtered.length) * 100 : 0}%`,
-                    backgroundColor: activeMemberData.color,
-                  },
-                ]}
+          {/* Members row */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.membersScroll}
+            contentContainerStyle={styles.membersContent}
+          >
+            {MEMBERS.map((m) => (
+              <Avatar
+                key={m.id}
+                member={m}
+                active={activeMember === m.id}
+                onPress={() => setActiveMember(m.id)}
               />
+            ))}
+          </ScrollView>
+
+          <ScrollView
+            style={styles.scroll}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 120 }}
+          >
+            {/* Urgent refill banner */}
+            {urgent.length > 0 && (
+              <View style={styles.urgentBanner}>
+                <AlertCircle size={16} color="#EF4444" />
+                <Text style={styles.urgentText}>
+                  {urgent.length} medication{urgent.length > 1 ? "s" : ""} need
+                  {urgent.length === 1 ? "s" : ""} refill soon
+                </Text>
+                <ChevronRight size={14} color="#EF4444" />
+              </View>
+            )}
+
+            {/* Progress */}
+            {filtered.length > 0 && (
+              <View style={styles.progressCard}>
+                <View style={styles.progressHeader}>
+                  <Text style={styles.progressTitle}>
+                    Today&apos;s Progress
+                  </Text>
+                  <Text
+                    style={[
+                      styles.progressCount,
+                      { color: activeMemberData.color },
+                    ]}
+                  >
+                    {takenCount}/{filtered.length}
+                  </Text>
+                </View>
+                <View style={styles.progressBar}>
+                  <View
+                    style={[
+                      styles.progressFill,
+                      {
+                        width: `${filtered.length ? (takenCount / filtered.length) * 100 : 0}%`,
+                        backgroundColor: activeMemberData.color,
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.progressSub}>
+                  {takenCount === filtered.length
+                    ? "🎉 All medications taken today!"
+                    : `${filtered.length - takenCount} remaining`}
+                </Text>
+              </View>
+            )}
+
+            {/* Medications list */}
+            <Text style={styles.sectionTitle}>
+              My Medications ({filtered.length})
+            </Text>
+
+            {filtered.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Pill size={48} color="#d1d5db" />
+                <Text style={styles.emptyTitle}>No medications added</Text>
+                <Text style={styles.emptySubtitle}>
+                  Tap + to add a medication for {activeMemberData.name}
+                </Text>
+              </View>
+            ) : (
+              filtered.map((med) => (
+                <MedCard
+                  key={med.id}
+                  med={med}
+                  onToggleTaken={toggleTaken}
+                  onDelete={deleteMed}
+                  onRefill={handleRefill}
+                  onOrderNow={handleOrderNow}
+                />
+              ))
+            )}
+
+            {/* Prescription Upload Card */}
+            <TouchableOpacity
+              style={styles.prescriptionUploadCard}
+              activeOpacity={0.8}
+              onPress={() => setShowPrescriptionUpload(true)}
+            >
+              <Camera size={20} color="#2A7A4F" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.prescriptionUploadTitle}>
+                  Upload Prescription
+                </Text>
+                <Text style={styles.prescriptionUploadSub}>
+                  Upload a valid doctor&apos;s prescription
+                </Text>
+              </View>
+              <ChevronRight size={16} color="#2A7A4F" />
+            </TouchableOpacity>
+
+            {/* Reminder card */}
+            <TouchableOpacity style={styles.reminderCard} activeOpacity={0.8}>
+              <Bell size={18} color="#2A7A4F" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.reminderTitle}>
+                  Set Medication Reminders
+                </Text>
+                <Text style={styles.reminderSub}>
+                  Get notified when it&apos;s time to take your meds
+                </Text>
+              </View>
+              <ChevronRight size={16} color="#2A7A4F" />
+            </TouchableOpacity>
+          </ScrollView>
+
+          {/* FAB */}
+          <TouchableOpacity
+            style={styles.fab}
+            onPress={() => setShowAddModal(true)}
+            activeOpacity={0.85}
+          >
+            <Plus size={28} color="#fff" />
+          </TouchableOpacity>
+
+          {/* Add Med Modal */}
+          <AddMedModal
+            visible={showAddModal}
+            memberId={activeMember}
+            onClose={() => setShowAddModal(false)}
+            onAdd={addMed}
+          />
+        </>
+      ) : (
+        /* Prescription Upload View */
+        <View style={styles.container}>
+          {/* Header */}
+          <View style={styles.header}>
+            <TouchableOpacity
+              onPress={() => setShowPrescriptionUpload(false)}
+              style={styles.backButton}
+            >
+              <ArrowLeft size={22} color="#1a1a1a" />
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>Upload Prescription</Text>
+          </View>
+
+          <ScrollView
+            contentContainerStyle={styles.uploadContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* Title */}
+            <Text style={styles.title}>What do you need?</Text>
+            <Text style={styles.subtitle}>
+              Upload a valid doctor&apos;s prescription and our pharmacists will
+              process your order immediately.
+            </Text>
+
+            {/* Top two options */}
+            <View style={styles.optionsRow}>
+              <TouchableOpacity
+                style={styles.optionCard}
+                onPress={handleTakePhoto}
+                activeOpacity={0.8}
+                disabled={loading}
+              >
+                <View
+                  style={[styles.iconCircle, { backgroundColor: "#EAF5EE" }]}
+                >
+                  <Camera size={26} color="#2A7A4F" />
+                </View>
+                <Text style={styles.optionLabel}>Take Photo</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.optionCard}
+                onPress={handleUploadGallery}
+                activeOpacity={0.8}
+                disabled={loading}
+              >
+                <View
+                  style={[styles.iconCircle, { backgroundColor: "#FFF8EC" }]}
+                >
+                  <ImageIcon size={26} color="#E8A020" />
+                </View>
+                <Text style={styles.optionLabel}>Upload Gallery</Text>
+              </TouchableOpacity>
             </View>
-            <Text style={styles.progressSub}>
-              {takenCount === filtered.length
-                ? "🎉 All medications taken today!"
-                : `${filtered.length - takenCount} remaining`}
-            </Text>
-          </View>
-        )}
 
-        {/* Medications list */}
-        <Text style={styles.sectionTitle}>
-          My Medications ({filtered.length})
-        </Text>
+            {/* File drop zone / preview */}
+            {selectedFile ? (
+              <View style={styles.previewContainer}>
+                {/* Remove button */}
+                <TouchableOpacity
+                  style={styles.removeButton}
+                  onPress={clearFile}
+                >
+                  <X size={16} color="#fff" />
+                </TouchableOpacity>
 
-        {filtered.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Pill size={48} color="#d1d5db" />
-            <Text style={styles.emptyTitle}>No medications added</Text>
-            <Text style={styles.emptySubtitle}>
-              Tap + to add a medication for {activeMemberData.name}
-            </Text>
-          </View>
-        ) : (
-          filtered.map((med) => (
-            <MedCard
-              key={med.id}
-              med={med}
-              onToggleTaken={toggleTaken}
-              onDelete={deleteMed}
-              onRefill={handleRefill}
-            />
-          ))
-        )}
+                {selectedFile.type === "image" ? (
+                  <Image
+                    source={{ uri: selectedFile.uri }}
+                    style={styles.previewImage}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={styles.pdfPreview}>
+                    <FileText size={48} color="#2A7A4F" />
+                    <Text style={styles.pdfFileName} numberOfLines={2}>
+                      {selectedFile.fileName}
+                    </Text>
+                    <Text style={styles.pdfLabel}>PDF Document</Text>
+                  </View>
+                )}
 
-        {/* Reminder card */}
-        <TouchableOpacity style={styles.reminderCard} activeOpacity={0.8}>
-          <Bell size={18} color="#2A7A4F" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.reminderTitle}>Set Medication Reminders</Text>
-            <Text style={styles.reminderSub}>
-              Get notified when it&apos;s time to take your meds
-            </Text>
-          </View>
-          <ChevronRight size={16} color="#2A7A4F" />
-        </TouchableOpacity>
-      </ScrollView>
+                {/* File name bar */}
+                <View style={styles.fileNameBar}>
+                  <CheckCircle size={14} color="#2A7A4F" />
+                  <Text style={styles.fileNameText} numberOfLines={1}>
+                    {selectedFile.fileName}
+                  </Text>
+                </View>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={styles.dropZone}
+                onPress={handleFileUpload}
+                activeOpacity={0.8}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator size="large" color="#2A7A4F" />
+                ) : (
+                  <>
+                    <FileUp size={32} color="#9ca3af" />
+                    <Text style={styles.dropZoneTitle}>No file selected</Text>
+                    <Text style={styles.dropZoneSubtitle}>
+                      Supported formats: JPG, PNG, PDF
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
 
-      {/* FAB */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => setShowAddModal(true)}
-        activeOpacity={0.85}
-      >
-        <Plus size={28} color="#fff" />
-      </TouchableOpacity>
+            {/* OR divider */}
+            <View style={styles.dividerRow}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>OR</Text>
+              <View style={styles.dividerLine} />
+            </View>
 
-      {/* Add Med Modal */}
-      <AddMedModal
-        visible={showAddModal}
-        memberId={activeMember}
-        onClose={() => setShowAddModal(false)}
-        onAdd={addMed}
-      />
+            {/* Action button — Submit if file selected, else Type Manually */}
+            {selectedFile ? (
+              <TouchableOpacity
+                style={styles.submitButton}
+                onPress={handleSubmit}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.submitButtonText}>Submit Prescription</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={styles.manualButton}
+                onPress={() =>
+                  Alert.alert(
+                    "Type Manually",
+                    "Navigate to manual entry screen.",
+                  )
+                }
+                activeOpacity={0.85}
+              >
+                <Text style={styles.manualButtonText}>Type Manually</Text>
+              </TouchableOpacity>
+            )}
+          </ScrollView>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -599,6 +976,7 @@ const styles = StyleSheet.create({
   settingsBtn: { padding: 4 },
   headerTitle: { fontSize: 17, fontWeight: "700", color: "#1a1a1a" },
 
+  // Members
   membersScroll: { flexGrow: 0, marginBottom: 4 },
   membersContent: {
     paddingHorizontal: 16,
@@ -727,6 +1105,22 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 15, fontWeight: "600", color: "#374151" },
   emptySubtitle: { fontSize: 13, color: "#9ca3af", textAlign: "center" },
 
+  prescriptionUploadCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "#EAF5EE",
+    borderRadius: 14,
+    padding: 16,
+    marginTop: 8,
+  },
+  prescriptionUploadTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1a1a1a",
+  },
+  prescriptionUploadSub: { fontSize: 12, color: "#6b7280", marginTop: 2 },
+
   reminderCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -754,6 +1148,188 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.35,
     shadowRadius: 10,
     elevation: 8,
+  },
+
+  // Upload styles
+  uploadContent: {
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 40,
+  },
+  title: {
+    fontSize: 26,
+    fontWeight: "700",
+    color: "#1a1a1a",
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: "#6b7280",
+    lineHeight: 20,
+    marginBottom: 24,
+  },
+  optionsRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 16,
+  },
+  optionCard: {
+    flex: 1,
+    backgroundColor: "#ffffff",
+    borderRadius: 14,
+    paddingVertical: 20,
+    alignItems: "center",
+    gap: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  iconCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  optionLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#1a1a1a",
+  },
+
+  // Drop zone
+  dropZone: {
+    borderWidth: 1.5,
+    borderColor: "#d1d5db",
+    borderStyle: "dashed",
+    borderRadius: 14,
+    paddingVertical: 40,
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#ffffff",
+    marginBottom: 24,
+  },
+  dropZoneTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#374151",
+    marginTop: 4,
+  },
+  dropZoneSubtitle: {
+    fontSize: 12,
+    color: "#9ca3af",
+  },
+
+  // Preview
+  previewContainer: {
+    borderRadius: 14,
+    overflow: "hidden",
+    marginBottom: 24,
+    backgroundColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  previewImage: {
+    width: "100%",
+    height: 200,
+  },
+  pdfPreview: {
+    height: 160,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#f0faf4",
+  },
+  pdfFileName: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#1a1a1a",
+    textAlign: "center",
+    paddingHorizontal: 16,
+  },
+  pdfLabel: {
+    fontSize: 12,
+    color: "#6b7280",
+  },
+  fileNameBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#f3f4f6",
+  },
+  fileNameText: {
+    flex: 1,
+    fontSize: 12,
+    color: "#374151",
+    fontWeight: "500",
+  },
+  removeButton: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    zIndex: 10,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    borderRadius: 12,
+    width: 24,
+    height: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // Divider
+  dividerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 20,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "#e5e7eb",
+  },
+  dividerText: {
+    fontSize: 12,
+    color: "#9ca3af",
+    fontWeight: "500",
+  },
+
+  // Buttons
+  manualButton: {
+    borderWidth: 1.5,
+    borderColor: "#2A7A4F",
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: "center",
+  },
+  manualButtonText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#2A7A4F",
+  },
+  submitButton: {
+    backgroundColor: "#2A7A4F",
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: "center",
+    shadowColor: "#2A7A4F",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  submitButtonText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#ffffff",
   },
 
   // Modal
@@ -816,4 +1392,15 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   addMedBtnText: { fontSize: 15, fontWeight: "700", color: "#fff" },
+  orderNowBtn: {
+    backgroundColor: "#2A7A4F",
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  orderNowBtnText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#fff",
+  },
 });

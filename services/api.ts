@@ -1,13 +1,52 @@
+import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
+import { Platform } from "react-native";
 
-const API_BASE_URL = "http://localhost:5002/api";
+// ─── Base URL ─────────────────────────────────────────────────────────────────
+
+const getBaseUrl = (): string => {
+  const debuggerHost =
+    Constants.expoConfig?.hostUri ||
+    (Constants as any).manifest?.debuggerHost ||
+    (Constants as any).manifest2?.extra?.expoClient?.hostUri ||
+    "";
+
+  const isSimulator =
+    debuggerHost.startsWith("localhost") ||
+    debuggerHost.startsWith("127.0.0.1") ||
+    debuggerHost === "";
+
+  // iOS Simulator → localhost
+  if (Platform.OS === "ios" && isSimulator) {
+    console.log("[API] iOS Simulator → http://localhost:5002/api");
+    return "http://localhost:5002/api";
+  }
+
+  // Android Emulator → special loopback alias
+  if (Platform.OS === "android" && isSimulator) {
+    console.log("[API] Android Emulator → http://10.0.2.2:5002/api");
+    return "http://10.0.2.2:5002/api";
+  }
+
+  // Physical device → use the LAN IP Expo is broadcasting on
+  if (debuggerHost) {
+    const host = debuggerHost.split(":")[0];
+    console.log(`[API] Physical device → http://${host}:5002/api`);
+    return `http://${host}:5002/api`;
+  }
+
+  console.log("[API] Fallback → localhost");
+  return "http://localhost:5002/api";
+};
+
+const API_BASE_URL = getBaseUrl();
 
 // ─── Token Helpers ────────────────────────────────────────────────────────────
 
 const storeToken = async (token: string): Promise<void> => {
   try {
     await SecureStore.setItemAsync("authToken", token);
-    console.log("[Auth] Token stored successfully");
+    console.log("[Auth] Token stored");
   } catch (error) {
     console.error("[Auth] Error storing token:", error);
   }
@@ -16,7 +55,7 @@ const storeToken = async (token: string): Promise<void> => {
 const getToken = async (): Promise<string | null> => {
   try {
     const token = await SecureStore.getItemAsync("authToken");
-    console.log("[Auth] Token retrieved:", token ? "✓ present" : "✗ null");
+    console.log("[Auth] Token:", token ? "✓ present" : "✗ null");
     return token;
   } catch (error) {
     console.error("[Auth] Error getting token:", error);
@@ -33,19 +72,14 @@ const removeToken = async (): Promise<void> => {
   }
 };
 
-// ─── Extract token from any known response shape ──────────────────────────────
-
-const extractToken = (data: any): string | null => {
-  return (
-    data?.token ||
-    data?.accessToken ||
-    data?.access_token ||
-    data?.data?.token ||
-    data?.data?.accessToken ||
-    data?.data?.access_token ||
-    null
-  );
-};
+const extractToken = (data: any): string | null =>
+  data?.token ||
+  data?.accessToken ||
+  data?.access_token ||
+  data?.data?.token ||
+  data?.data?.accessToken ||
+  data?.data?.access_token ||
+  null;
 
 // ─── Core Request ─────────────────────────────────────────────────────────────
 
@@ -57,10 +91,6 @@ const apiRequest = async (
   try {
     const token = requiresAuth ? await getToken() : null;
 
-    if (requiresAuth && !token) {
-      console.warn(`[API] No token available for protected route: ${endpoint}`);
-    }
-
     const config: RequestInit = {
       ...options,
       headers: {
@@ -70,19 +100,15 @@ const apiRequest = async (
       },
     };
 
-    console.log(`[API] ${options.method || "GET"} ${endpoint}`);
-    if (options.body) {
-      console.log(`[API] Request body:`, options.body);
-    }
+    const fullUrl = `${API_BASE_URL}${endpoint}`;
+    console.log(`[API] ${options.method || "GET"} ${fullUrl}`);
 
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
-
-    console.log(`[API] Response status: ${response.status}`);
+    const response = await fetch(fullUrl, config);
+    console.log(`[API] Status: ${response.status}`);
 
     let data: any;
     const contentType = response.headers.get("content-type");
-
-    if (contentType && contentType.includes("application/json")) {
+    if (contentType?.includes("application/json")) {
       data = await response.json();
     } else {
       const text = await response.text();
@@ -90,27 +116,29 @@ const apiRequest = async (
       data = { message: text };
     }
 
-    console.log(`[API] Response data:`, JSON.stringify(data, null, 2));
-
     if (!response.ok) {
       const errorMessage =
-        data?.message ||
-        data?.error ||
-        data?.msg ||
-        `Request failed with status ${response.status}`;
+        data?.message || data?.error || `HTTP ${response.status}`;
 
       if (response.status === 401) {
-        console.warn(`[API] Authentication required for ${endpoint}`);
         return { success: false, message: errorMessage, requiresAuth: true };
       }
 
-      console.error(`[API] Error ${response.status}:`, errorMessage);
       throw new Error(errorMessage);
     }
 
     return data;
-  } catch (error) {
-    console.error(`[API] Request error on ${endpoint}:`, error);
+  } catch (error: any) {
+    if (
+      error.message === "Network request failed" ||
+      error.message?.includes("fetch")
+    ) {
+      throw new Error(
+        "Cannot reach the server.\n\n" +
+          "Simulator: make sure backend is running on port 5002.\n" +
+          "Physical device: phone must be on the same Wi-Fi as your computer.",
+      );
+    }
     throw error;
   }
 };
@@ -119,108 +147,61 @@ const apiRequest = async (
 
 export const authAPI = {
   register: async (userData: {
-    name?: string;
     email: string;
     password: string;
     [key: string]: any;
   }) => {
     const data = await apiRequest(
       "/auth/register",
-      {
-        method: "POST",
-        body: JSON.stringify(userData),
-      },
+      { method: "POST", body: JSON.stringify(userData) },
       false,
     );
-
-    console.log("[Auth] Register response:", JSON.stringify(data));
-
     const token = extractToken(data);
-    if (token) {
-      await storeToken(token);
-    } else {
-      console.warn("[Auth] No token found in register response");
-    }
-
+    if (token) await storeToken(token);
     return data;
   },
 
   login: async (email: string, password: string) => {
     const data = await apiRequest(
       "/auth/login",
-      {
-        method: "POST",
-        body: JSON.stringify({ email, password }),
-      },
+      { method: "POST", body: JSON.stringify({ email, password }) },
       false,
     );
-
-    console.log("[Auth] Login response:", JSON.stringify(data));
-
     const token = extractToken(data);
-    if (token) {
-      await storeToken(token);
-    } else {
-      console.warn("[Auth] No token found in login response. Check API shape.");
-    }
-
+    if (token) await storeToken(token);
     return data;
   },
 
-  getProfile: async () => {
-    return apiRequest("/auth/me");
-  },
+  getProfile: async () => apiRequest("/auth/me"),
 
-  updateProfile: async (profileData: {
-    name?: string;
-    email?: string;
-    phone?: string;
-    address?: string;
-    [key: string]: any;
-  }) => {
-    return apiRequest("/auth/profile", {
+  updateProfile: async (profileData: Record<string, any>) =>
+    apiRequest("/auth/profile", {
       method: "PUT",
       body: JSON.stringify(profileData),
-    });
-  },
+    }),
 
-  logout: async () => {
-    await removeToken();
-  },
+  logout: async () => removeToken(),
 
-  isLoggedIn: async (): Promise<boolean> => {
-    const token = await getToken();
-    return !!token;
-  },
+  isLoggedIn: async (): Promise<boolean> => !!(await getToken()),
 };
 
 // ─── Medication APIs ──────────────────────────────────────────────────────────
 
 export const medicationAPI = {
   getAll: async (params?: Record<string, string>) => {
-    const queryString = params
-      ? `?${new URLSearchParams(params).toString()}`
-      : "";
-    return apiRequest(`/medications${queryString}`);
+    const qs = params ? `?${new URLSearchParams(params).toString()}` : "";
+    return apiRequest(`/medications${qs}`);
   },
-
-  getById: async (id: string) => {
-    return apiRequest(`/medications/${id}`);
-  },
-
-  getCategories: async () => {
-    return apiRequest("/medications/categories/all");
-  },
-
+  getById: async (id: string) => apiRequest(`/medications/${id}`),
+  getCategories: async () => apiRequest("/medications/categories/all"),
   addReview: async (
     medicationId: string,
     review: { rating: number; comment?: string },
-  ) => {
-    return apiRequest(`/medications/${medicationId}/reviews`, {
+  ) =>
+    apiRequest(`/medications/${medicationId}/reviews`, {
       method: "POST",
       body: JSON.stringify(review),
-    });
-  },
+    }),
 };
 
 // ─── Order APIs ───────────────────────────────────────────────────────────────
@@ -228,7 +209,6 @@ export const medicationAPI = {
 export const orderAPI = {
   create: async (orderData: {
     items: {
-      // Support both DB-backed (medication) and local catalog items (name + price)
       medication?: string;
       name?: string;
       quantity: number;
@@ -239,84 +219,59 @@ export const orderAPI = {
     phoneNumber?: string;
     totalAmount?: number;
     [key: string]: any;
-  }) => {
-    return apiRequest("/orders", {
+  }) =>
+    apiRequest("/orders", {
       method: "POST",
       body: JSON.stringify(orderData),
-    });
-  },
+    }),
 
   getUserOrders: async (params?: Record<string, string>) => {
-    const queryString = params
-      ? `?${new URLSearchParams(params).toString()}`
-      : "";
-    return apiRequest(`/orders${queryString}`);
+    const qs = params ? `?${new URLSearchParams(params).toString()}` : "";
+    return apiRequest(`/orders${qs}`);
   },
 
-  getOrderById: async (id: string) => {
-    return apiRequest(`/orders/${id}`);
-  },
+  getOrderById: async (id: string) => apiRequest(`/orders/${id}`),
 
-  cancelOrder: async (id: string) => {
-    return apiRequest(`/orders/${id}/cancel`, {
-      method: "PUT",
-    });
-  },
+  cancelOrder: async (id: string) =>
+    apiRequest(`/orders/${id}/cancel`, { method: "PUT" }),
+
+  clearOrderHistory: async () =>
+    apiRequest("/orders/clear", { method: "DELETE" }),
 };
 
 // ─── User Medication APIs ─────────────────────────────────────────────────────
 
 export const userMedicationAPI = {
-  getAll: async (isActive = true) => {
-    return apiRequest(`/users/medications?isActive=${isActive}`);
-  },
+  getAll: async (isActive = true) =>
+    apiRequest(`/users/medications?isActive=${isActive}`),
 
-  add: async (medicationData: {
-    medicationId: string;
-    dosage?: string;
-    frequency?: string;
-    startDate?: string;
-    endDate?: string;
-    [key: string]: any;
-  }) => {
-    return apiRequest("/users/medications", {
+  add: async (medicationData: Record<string, any>) =>
+    apiRequest("/users/medications", {
       method: "POST",
       body: JSON.stringify(medicationData),
-    });
-  },
+    }),
 
-  update: async (id: string, medicationData: Record<string, any>) => {
-    return apiRequest(`/users/medications/${id}`, {
+  update: async (id: string, data: Record<string, any>) =>
+    apiRequest(`/users/medications/${id}`, {
       method: "PUT",
-      body: JSON.stringify(medicationData),
-    });
-  },
+      body: JSON.stringify(data),
+    }),
 
-  delete: async (id: string) => {
-    return apiRequest(`/users/medications/${id}`, {
-      method: "DELETE",
-    });
-  },
+  delete: async (id: string) =>
+    apiRequest(`/users/medications/${id}`, { method: "DELETE" }),
 
-  markTaken: async (id: string, taken: boolean, time?: string) => {
-    return apiRequest(`/users/medications/${id}/taken`, {
+  markTaken: async (id: string, taken: boolean, time?: string) =>
+    apiRequest(`/users/medications/${id}/taken`, {
       method: "PUT",
       body: JSON.stringify({ taken, ...(time ? { time } : {}) }),
-    });
-  },
+    }),
 
-  getDashboard: async () => {
-    return apiRequest("/users/dashboard");
-  },
+  getDashboard: async () => apiRequest("/users/dashboard"),
 };
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 
-export const healthCheck = async () => {
-  return apiRequest("/health", {}, false);
-};
-
-// ─── Default Export ───────────────────────────────────────────────────────────
+export const healthCheck = async () => apiRequest("/health", {}, false);
 
 export default {
   authAPI,

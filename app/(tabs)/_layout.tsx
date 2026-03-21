@@ -1,9 +1,20 @@
 import { HapticTab } from "@/components/haptic-tab";
 import { Colors } from "@/constants/theme";
 import { Tabs } from "expo-router";
-import { ClipboardList, House, Pill, Plus, User } from "lucide-react-native";
+import {
+  ClipboardList,
+  House,
+  MessageCircleQuestionMark,
+  Plus,
+  User,
+} from "lucide-react-native";
 import React from "react";
-import { StyleSheet, TouchableOpacity, useColorScheme, View } from "react-native";
+import {
+  StyleSheet,
+  TouchableOpacity,
+  useColorScheme,
+  View,
+} from "react-native";
 
 function CenterAddButton({ onPress }: { onPress?: () => void }) {
   return (
@@ -41,7 +52,7 @@ export default function TabLayout() {
           fontWeight: "600",
         },
         tabBarBackground: () => (
-          <View className="flex-1 mx-4 bg-white dark:bg-gray-900 rounded-[25px] shadow-2xl border border-gray-100 dark:border-gray-800" />
+          <View className="flex-1 mx-1 bg-white dark:bg-gray-900 rounded-[20px] shadow-2xl border border-gray-100 dark:border-gray-800" />
         ),
       }}
     >
@@ -60,7 +71,7 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="camera"
+        name="meds"
         options={{
           title: "",
           tabBarIcon: () => null,
@@ -71,17 +82,20 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="meds"
-        options={{
-          title: "Meds",
-          tabBarIcon: ({ color }) => <Pill size={24} color={color} />,
-        }}
-      />
-      <Tabs.Screen
         name="profile"
         options={{
           title: "Profile",
           tabBarIcon: ({ color }) => <User size={24} color={color} />,
+        }}
+      />
+      ,
+      <Tabs.Screen
+        name="help"
+        options={{
+          title: "Help",
+          tabBarIcon: ({ color }) => (
+            <MessageCircleQuestionMark size={24} color={color} />
+          ),
         }}
       />
     </Tabs>
@@ -95,16 +109,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   centerButton: {
-    width: 52,
-    height: 52,
+    width: 54,
+    height: 54,
     borderRadius: 26,
     backgroundColor: "#1A6B47",
     alignItems: "center",
     justifyContent: "center",
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 2, height: 4 },
     shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 6,
+    shadowRadius: 4,
+    elevation: 4,
   },
 });

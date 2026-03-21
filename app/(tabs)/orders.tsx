@@ -2,30 +2,31 @@ import { useAuth } from "@/context/auth-context"; // adjust path as needed
 import { orderAPI } from "@/services/api"; // adjust path as needed
 import { useRouter } from "expo-router";
 import {
-  ArrowLeft,
-  CheckCircle2,
-  Clock,
-  MapPin,
-  Package,
-  RotateCcw,
-  Search,
-  Truck,
-  X,
-  XCircle,
+    ArrowLeft,
+    CheckCircle2,
+    Clock,
+    MapPin,
+    Package,
+    RotateCcw,
+    Search,
+    Trash2,
+    Truck,
+    X,
+    XCircle,
 } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
 import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    Modal,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from "react-native-safe-area-context";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -249,11 +250,13 @@ function OrderCard({
   onTrack,
   onReorder,
   onViewDetail,
+  onCancel,
 }: {
   order: Order;
   onTrack: () => void;
   onReorder: () => void;
   onViewDetail: () => void;
+  onCancel: (id: string) => void;
 }) {
   const cfg = statusConfig(order.status);
   const StatusIcon = cfg.icon;
@@ -294,14 +297,24 @@ function OrderCard({
 
       {/* Action button */}
       {isActive ? (
-        <TouchableOpacity
-          style={styles.trackBtn}
-          onPress={onTrack}
-          activeOpacity={0.85}
-        >
-          <Truck size={15} color="#fff" />
-          <Text style={styles.trackBtnText}>Track Order</Text>
-        </TouchableOpacity>
+        <View style={styles.actionButtonsRow}>
+          <TouchableOpacity
+            style={styles.trackBtn}
+            onPress={onTrack}
+            activeOpacity={0.85}
+          >
+            <Truck size={15} color="#fff" />
+            <Text style={styles.trackBtnText}>Track Order</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.cancelBtn}
+            onPress={() => onCancel(order._id)}
+            activeOpacity={0.85}
+          >
+            <X size={15} color="#ef4444" />
+            <Text style={styles.cancelBtnText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <TouchableOpacity
           style={styles.reorderBtn}
@@ -375,11 +388,22 @@ export default function OrdersScreen() {
 
   useEffect(() => {
     if (user?._id) {
-      fetchOrders();
+      fetchOrders(); // Initial fetch
+
+      // Set up periodic refresh every 3 seconds
+      const interval = setInterval(() => {
+        if (user?._id) {
+          fetchOrders();
+        }
+      }, 3000);
+
+      return () => {
+        clearInterval(interval);
+      };
     } else {
-      setLoading(false);
+      setOrders([]);
     }
-  }, [user]);
+  }, [user?._id]);
 
   // ─── Filtered orders ───────────────────────────────────────────────────────
 
@@ -395,16 +419,131 @@ export default function OrdersScreen() {
 
   // ─── Reorder handler ───────────────────────────────────────────────────────
 
-  const handleReorder = (order: Order) => {
+  const handleReorder = async (order: Order) => {
     Alert.alert("Reorder", `Place the same order as #${order.orderNumber}?`, [
       { text: "Cancel", style: "cancel" },
       {
         text: "Confirm",
-        onPress: () =>
-          Alert.alert("Order Placed!", "Your reorder has been submitted."),
+        style: "default",
+        onPress: async () => {
+          try {
+            console.log("Reordering items from order:", order._id);
+
+            // Create new order with same items
+            const reorderData = {
+              items: order.items.map((item) => ({
+                name: item.name,
+                quantity: item.qty,
+                price: item.price,
+              })),
+              totalAmount: order.totalAmount,
+              deliveryAddress: order.deliveryAddress || "Default Address", // Fallback address
+            };
+
+            console.log("Reorder data:", reorderData);
+            const response = await orderAPI.create(reorderData);
+            console.log("Reorder response:", response);
+
+            // Refresh orders list
+            await fetchOrders();
+
+            Alert.alert(
+              "Order Placed!",
+              `Your reorder has been submitted successfully. Order #${response.data?._id || response._id || "Created"}`,
+              [
+                { text: "OK" },
+                { text: "View Orders", onPress: () => setDetailOrder(null) },
+              ],
+            );
+
+            setDetailOrder(null);
+          } catch (error: any) {
+            console.error("Reorder error:", error);
+            Alert.alert(
+              "Reorder Failed",
+              `Failed to place reorder: ${error?.message || "Please try again."}`,
+              [{ text: "OK" }],
+            );
+          }
+        },
       },
     ]);
-    setDetailOrder(null);
+  };
+
+  // ─── Clear order history handler ─────────────────────────────────────────────
+
+  const handleClearOrderHistory = async () => {
+    Alert.alert(
+      "Clear Order History",
+      "Are you sure you want to clear your entire order history? This action cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear History",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              console.log("Clearing order history for user:", user?._id);
+              const response = await orderAPI.clearOrderHistory();
+              console.log("Clear history response:", response);
+
+              // Refresh orders list
+              await fetchOrders();
+
+              Alert.alert(
+                "History Cleared",
+                `Successfully cleared ${response.data?.deletedCount || 0} orders from your history.`,
+                [{ text: "OK" }],
+              );
+            } catch (error: any) {
+              console.error("Clear history error:", error);
+              Alert.alert(
+                "Clear Failed",
+                "Failed to clear order history. Please try again.",
+                [{ text: "OK" }],
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleCancelOrder = async (orderId: string) => {
+    Alert.alert(
+      "Cancel Order",
+      "Are you sure you want to cancel this order? This action cannot be undone.",
+      [
+        { text: "No", style: "cancel" },
+        {
+          text: "Yes, Cancel",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              console.log("Cancelling order:", orderId);
+              const response = await orderAPI.cancelOrder(orderId);
+              console.log("Cancel response:", response);
+
+              // Refresh orders list
+              await fetchOrders();
+
+              Alert.alert(
+                "Order Cancelled",
+                "Your order has been successfully cancelled.",
+                [{ text: "OK" }],
+              );
+            } catch (error: any) {
+              console.error("Cancel order error:", error);
+              Alert.alert(
+                "Cancellation Failed",
+                "Failed to cancel order. Please try again.",
+                [{ text: "OK" }],
+              );
+            }
+          },
+        },
+      ],
+    );
   };
 
   // ─── Not logged in ─────────────────────────────────────────────────────────
@@ -485,6 +624,14 @@ export default function OrdersScreen() {
           <Text style={styles.headerTitle}>Order History</Text>
         )}
         <TouchableOpacity
+          style={styles.clearBtn}
+          onPress={handleClearOrderHistory}
+          activeOpacity={0.85}
+        >
+          <Trash2 size={18} color="#ef4444" />
+          <Text style={styles.clearBtnText}>Clear</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
           style={styles.searchBtn}
           onPress={() => {
             setShowSearch((v) => !v);
@@ -543,6 +690,7 @@ export default function OrdersScreen() {
               onTrack={() => setTrackingOrder(order)}
               onReorder={() => handleReorder(order)}
               onViewDetail={() => setDetailOrder(order)}
+              onCancel={handleCancelOrder}
             />
           ))
         )}
@@ -657,15 +805,6 @@ const styles = StyleSheet.create({
   },
   cardDivider: { height: 1, backgroundColor: "#f3f4f6", marginBottom: 12 },
 
-  trackBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: "#D97706",
-    borderRadius: 10,
-    paddingVertical: 12,
-  },
   trackBtnText: { fontSize: 14, fontWeight: "700", color: "#fff" },
   reorderBtn: {
     flexDirection: "row",
@@ -831,4 +970,57 @@ const styles = StyleSheet.create({
   },
   detailTotalLabel: { fontSize: 15, fontWeight: "700", color: "#1a1a1a" },
   detailTotalValue: { fontSize: 15, fontWeight: "700", color: "#2A7A4F" },
+
+  // Cancel button styles
+  actionButtonsRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  trackBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: "#2A7A4F",
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  cancelBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: "#fef2f2",
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: "#fecaca",
+  },
+  cancelBtnText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#ef4444",
+  },
+
+  // Clear button styles
+  clearBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#fef2f2",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: "#fecaca",
+  },
+  clearBtnText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#ef4444",
+  },
 });
